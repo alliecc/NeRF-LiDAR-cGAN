@@ -1,14 +1,13 @@
 # NeRF-LiDAR-cGAN
 
-This is an under working repo for the following paper:
+This is the working repo for the following paper:
 
 Ming-Fang Chang, Akash Sharma, Michael Kaess, and Simon Lucey. Neural Radiance Fields with LiDAR Maps. ICCV 2023.
+[paper link](https://openaccess.thecvf.com//content/ICCV2023/papers/Chang_Neural_Radiance_Field_with_LiDAR_maps_ICCV_2023_paper.pdf)
 
 <p align="center">
 <img src='https://github.com/alliecc/NeRF-LiDAR-cGAN/blob/main/imgs/block1_v2.png' width='640' align=”center”>
 </p>
-
-[paper link coming soon]
 
 If you find our work useful, please consider to cite:
 
@@ -49,7 +48,7 @@ If you find our work useful, please consider to cite:
 </p>
 
 ### 4. Run the code:
-   1. Run `python3 train.py --log_id=<log_id> --name_config=config.ini --eval_only`.
+   1. Run `python3 train.py --name_data=clean --log_id=<log_id> --name_config=config.ini --eval_only`.
    2. Check the results with tensorboard (e.g. Run `tensorboard --logdir=logs>` to see the visuals. The log path can be specified in `configs/config.ini`).
    3. You can download the trained weights from [weights (clean maps)](https://drive.google.com/file/d/1ZjEXD1XigYyJwazdJ8PTD6uM6ell5Xyb/view?usp=drive_link) [weights (noisy maps)](https://drive.google.com/file/d/1J_G54UECEhBivVDQMVBMo2uslv6GUr7b/view?usp=sharing).
    4. Expected outputs (from log `2b044433-ddc1-3580-b560-d46474934089`):
