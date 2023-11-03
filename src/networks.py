@@ -58,7 +58,7 @@ class LiDARNeRF(torch.nn.Module):
         self.pix2pix = gan_models.pix2pix_model.Pix2PixModel(opt)
         self.pix2pix.gan_loss_weight = float(cfg['gan_loss_weight'])
         self.pix2pix.optimizer_G = torch.optim.Adam(list(self.pix2pix.netG.parameters()) +
-                                                    list(self.parameters()), lr=float(cfg['lr']))  # , betas=(0.5, 0.999))
+                                                    list(self.parameters()), lr=float(cfg['lr']))  
         self.pix2pix.use_mask = True
 
     def mlp_init(self):

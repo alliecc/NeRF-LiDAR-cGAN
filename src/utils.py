@@ -72,3 +72,19 @@ def clip_values(x):
     x[x > 1] = 1
     x[x < -1] = -1
     return x
+
+
+
+def get_ray_dir(uv, K, E):
+
+    x = (uv[:, 0] + 0.5 - K[0, 2]) / K[0, 0]
+    y = (uv[:, 1] + 0.5 - K[1, 2]) / K[1, 1]
+    z = torch.ones_like(x)
+    dirs = torch.stack([x, y, z], axis=-1)
+
+    dirs = dirs @ E[0:3, 0:3]  # .T
+
+    dirs = dirs / (torch.norm(dirs, dim=1)[:, None] + 1e-5)
+
+    return dirs
+
