@@ -80,7 +80,7 @@ class GraphGenerator(LiDARDataset):
 
         sample = self.point_sampler(cam_center, ray_dirs, E, K)
 
-        return self.build_dgl_graph(sample)     
+        return self.point_sampler_build_dgl_graph(sample)     
 
 
     def generate_initial_ray_sample(self, cam_center, ray_dirs):
@@ -89,46 +89,90 @@ class GraphGenerator(LiDARDataset):
         steps = torch.arange(self.ray_sample_steps, dtype=torch.short)[None, :]
 
         steps_dist_to_cam = self.depth_min + self.depth_max * steps/self.ray_sample_steps
+
+
         sample_pts = cam_center[None, None, :] + steps_dist_to_cam[:, :, None]*ray_dirs[:, None, :]
 
         return sample_pts, steps 
 
-    def point_sampler(self, cam_center, ray_dirs, E, K):
+    def point_sampler_build_dgl_graph(self, cam_center, ray_dirs, E, K):
         num_pixels = ray_dirs.shape[0]
         
         sample0_xyz, steps0 = self.generate_initial_ray_sample(cam_center, ray_dirs)  # N0xM0x3,  N0xM0x1
 
         N0, M0, _ = sample0_xyz.shape
-        sample0_xyz = sample0_xyz.reshape(-1, 3) # (N0*M0) x3 in world coorinate frame
+        sample0_xyz = sample0_xyz.reshape(-1, 3).numpy() # (N0*M0) x3 in world coorinate frame
 
 
         #remove the samples outside the map range
-        map_min = torch.from_numpy(self.map.min(axis=0))
-        map_max = torch.from_numpy(self.map.max(axis=0))
-        mask_sample_valid = ((sample0_xyz > map_min) * (sample0_xyz < map_max)).all(axis=1)
+        map_min = self.map.min(axis=0)
+        map_max = self.map.max(axis=0)
+        ind_sel_samples = np.arange(N0*M0)
+        ind_sel_samples = ind_sel_samples[((sample0_xyz > map_min) * (sample0_xyz < map_max)).all(axis=1)]
 
         #only keep the samples whose distance to closest map points is less than knn_radius
-        dist_sample_to_map_points, nearest_map_points_idx = self.map_kd_tree.query(sample0_xyz[mask_sample_valid].numpy(), distance_upper_bound=self.knn_radius)
-
+        dist_sample_to_map_points, nearest_map_points_ind = self.map_kd_tree.query(sample0_xyz[ind_sel_samples], distance_upper_bound=self.knn_radius)
         mask_knn = dist_sample_to_map_points < self.knn_radius 
+
+        #select only num_sample_per_ray samples for each pixel
+        ind_sel_samples = ind_sel_samples[mask_knn]
+        mask_all_samples = np.zeros(N0*M0)
+        mask_all_samples[ind_sel_samples] = 1
+        mask_all_samples = mask_all_samples.reshape(N0, M0)
+        cum_sum_num_samples_per_pixel = mask_all_samples.cumsum(axis=1)
+        mask_all_samples[cum_sum_num_samples_per_pixel > self.num_sample_per_ray] = 0
+        mask_all_samples = (mask_all_samples==1).flatten()
+
+        #query knn neighbors for the valid samples
+        sample = sample0_xyz[mask_all_samples]
+        dist_sample_to_map_points, nearest_map_points_ind = self.map_kd_tree.query(sample, k = self.max_num_map_points, distance_upper_bound=self.knn_radius)
         
-        dist_sample_to_map_points, nearest_map_points_idx = self.map_kd_tree.query(sample0_xyz[mask_sample_valid][mask_knn].numpy(), k = self.max_num_map_points)
-        nearest_map_points_idx = torch.from_numpy(nearest_map_points_idx.astype(int)).long()
+        #some samples have less than max_num_map_points nearby map points
+        mask_map_points = dist_sample_to_map_points < self.knn_radius
+        #ind_dummpy_map_point = nearest_map_points_ind.max() 
+       # nearest_map_points_ind = torch.from_numpy(nearest_map_points_ind.astype(int)).long()
+
+        
+        nearest_map_points_ind = nearest_map_points_ind[mask_map_points]
+
+        unique_map_points_ind, unique_map_points_ind_mapping = np.unique(nearest_map_points_ind, return_index=True)
+        #the node id in DGL graphs should start from zeros, otherwise it creates dummpy nodes.
+        unique_map_points_ind_normalized = torch.arange(unique_map_points_ind.shape[0])
+        map_ind_mapping = dict(zip(unique_map_points_ind, unique_map_points_ind_normalized))
+        nearest_map_points_ind_normalized = np.vectorize(map_ind_mapping.get)(nearest_map_points_ind)
+
+        unique_ind_sample = torch.arange(sample.shape[0]).unsqueeze(1).repeat(1, self.max_num_map_points)[mask_map_points]
+
+        
+        import pdb; pdb.set_trace()
+
+        #record the pixel inds corresponding to each sample
+        ind_pixels = np.arange(N0)[:, np.newaxis].repeat(M0, axis=1).flatten()[mask_all_samples]
+        unique_ind_pixels, unique_ind_pixels_mapping = np.unique(ind_pixels, return_index=True)
+        unique_ind_pixels_normalized = np.arange(unique_ind_pixels.shape[0])
+        pixel_ind_mapping = dict(zip(unique_ind_pixels, unique_ind_pixels_normalized))
+        ind_pixel_normalized = np.vectorize(pixel_ind_mapping.get)(ind_pixels)
 
 
-        #check if it's sorted by distance....
-
-        #keep only up to num_sample_per_ray for each pixel
-
-
-        #keep only up to max_num_map_points for each ray sample
-        self.num_sample_per_ray
-
-        #put everything into a dgl graph format
+        #put everything into our dgl graph format and build the graph
+        g_data = {('voxel', 'neighbor', 'sample'):
+                  (nearest_map_points_ind_normalized, unique_ind_sample),
+                  ('sample', 'ray', 'pixel'):
+                  (unique_ind_sample, ind_pixel_normalized),
+                  }
 
 
-    def build_dgl_graph(self, sample):
-        pass
+        g = dgl.heterograph(g_data)
+
+        #store data on the graph nodes
+        g.nodes['sample'].data['dist_to_cam'] = steps0.repeat(N0,1).flatten()[mask_all_samples]
+        g.nodes['sample'].data['sample_xyz'] = torch.from_numpy(sample).float()
+        g.nodes['voxel'].data['ind_voxel'] = torch.from_numpy(unique_map_points_ind).float()
+        g.nodes['pixel'].data['ind_pixel'] = torch.from_numpy(unique_ind_pixels).float()
+        
+
+        return g
+
 
 
 
