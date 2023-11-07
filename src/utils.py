@@ -16,7 +16,7 @@ def denormalize_img(img):
     return out
 
 
-def read_img(path, img_size, K):  # should merge this with the modify K function
+def read_img(path, img_size, K, return_raw_size=False):  # should merge this with the modify K function
 
     img = cv2.imread(path)
 
@@ -37,7 +37,14 @@ def read_img(path, img_size, K):  # should merge this with the modify K function
     if img_size != img.shape[0]:
         img = cv2.resize(img, (img_size, img_size))
 
-    return normalize_img(img[:, :, [2, 1, 0]].astype(np.float32))
+
+    img_normalized =  normalize_img(img[:, :, [2, 1, 0]].astype(np.float32))
+
+    if return_raw_size:
+        return img_normalized, (img_h, img_w)
+
+    else:
+        return img_normalized
 
 
 def depth_inv_to_color(depth_inv):
@@ -88,3 +95,20 @@ def get_ray_dir(uv, K, E):
 
     return dirs
 
+def modify_K_resize(K, resize, img_raw_size):
+
+    if img_raw_size[0] != img_raw_size[1]:  # argo case
+ 
+        D = min(img_raw_size)
+
+        if img_raw_size[0] > img_raw_size[1]:
+            up_left = int(K[1, 2]-D//2)
+            K[1, 2] = K[1, 2] - up_left
+        else:
+            up_left = int(K[0, 2]-D//2)
+            K[0, 2] = K[0, 2] - up_left
+
+    K = K.copy()
+    K /= resize
+    K[2, 2] = 1
+    return K

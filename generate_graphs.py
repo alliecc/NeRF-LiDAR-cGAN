@@ -10,7 +10,7 @@ import open3d as o3d
 import numpy as np
 from src.trainer import Trainer
 from src.dataloader import LiDARDataset, collate_fn
-from src.utils import get_ray_dir
+from src.utils import get_ray_dir, modify_K_resize, read_img
 from pykdtree.kdtree import KDTree
 
 class GraphGenerator(LiDARDataset):
@@ -63,7 +63,16 @@ class GraphGenerator(LiDARDataset):
         if not os.path.exists(path_graph):
             print(f'Generate graph and save to {path_graph}')
             E = torch.from_numpy(self.data['E'][ind]).float()
-            K = torch.from_numpy(self.data['K'][ind]).float()
+            #K = torch.from_numpy(self.data['K'][ind]).float()
+            #adjust K according to image size
+            img, img_raw_size = read_img(os.path.join(self.cfg['path_data_folder'], self.data_folder_name, self.data['path_img']
+                                    [ind]), self.img_size, self.data['K'][ind], return_raw_size=True)
+
+            resize_ratio = min(img_raw_size[0], img_raw_size[1])/self.img_size
+
+            K = modify_K_resize(self.data['K'][ind], resize_ratio, img_raw_size)
+
+
             graph = self.generate_dgl_graph_from_E(E, K)
             dgl.data.utils.save_graphs(path_graph, graph)
 
@@ -78,9 +87,8 @@ class GraphGenerator(LiDARDataset):
 
         cam_center = torch.inverse(E)[0:3, 3]
 
-        sample = self.point_sampler(cam_center, ray_dirs, E, K)
+        g = self.point_sampler_build_dgl_graph(cam_center, ray_dirs, E, K)
 
-        return self.point_sampler_build_dgl_graph(sample)     
 
 
     def generate_initial_ray_sample(self, cam_center, ray_dirs):
@@ -96,8 +104,8 @@ class GraphGenerator(LiDARDataset):
         return sample_pts, steps 
 
     def point_sampler_build_dgl_graph(self, cam_center, ray_dirs, E, K):
+
         num_pixels = ray_dirs.shape[0]
-        
         sample0_xyz, steps0 = self.generate_initial_ray_sample(cam_center, ray_dirs)  # N0xM0x3,  N0xM0x1
 
         N0, M0, _ = sample0_xyz.shape
@@ -125,56 +133,76 @@ class GraphGenerator(LiDARDataset):
 
         #query knn neighbors for the valid samples
         sample = sample0_xyz[mask_all_samples]
+
         dist_sample_to_map_points, nearest_map_points_ind = self.map_kd_tree.query(sample, k = self.max_num_map_points, distance_upper_bound=self.knn_radius)
         
         #some samples have less than max_num_map_points nearby map points
         mask_map_points = dist_sample_to_map_points < self.knn_radius
-        #ind_dummpy_map_point = nearest_map_points_ind.max() 
-       # nearest_map_points_ind = torch.from_numpy(nearest_map_points_ind.astype(int)).long()
-
-        
         nearest_map_points_ind = nearest_map_points_ind[mask_map_points]
 
-        unique_map_points_ind, unique_map_points_ind_mapping = np.unique(nearest_map_points_ind, return_index=True)
         #the node id in DGL graphs should start from zeros, otherwise it creates dummpy nodes.
+        unique_map_points_ind = np.unique(nearest_map_points_ind)
+        
         unique_map_points_ind_normalized = torch.arange(unique_map_points_ind.shape[0])
         map_ind_mapping = dict(zip(unique_map_points_ind, unique_map_points_ind_normalized))
         nearest_map_points_ind_normalized = np.vectorize(map_ind_mapping.get)(nearest_map_points_ind)
-
-        unique_ind_sample = torch.arange(sample.shape[0]).unsqueeze(1).repeat(1, self.max_num_map_points)[mask_map_points]
-
-        
-        import pdb; pdb.set_trace()
+        unique_ind_sample_to_map = torch.arange(sample.shape[0]).unsqueeze(1).repeat(1, self.max_num_map_points)[mask_map_points]
 
         #record the pixel inds corresponding to each sample
         ind_pixels = np.arange(N0)[:, np.newaxis].repeat(M0, axis=1).flatten()[mask_all_samples]
-        unique_ind_pixels, unique_ind_pixels_mapping = np.unique(ind_pixels, return_index=True)
+        unique_ind_pixels = np.unique(ind_pixels)
         unique_ind_pixels_normalized = np.arange(unique_ind_pixels.shape[0])
         pixel_ind_mapping = dict(zip(unique_ind_pixels, unique_ind_pixels_normalized))
         ind_pixel_normalized = np.vectorize(pixel_ind_mapping.get)(ind_pixels)
 
+        unique_ind_sample_to_pixel = torch.arange(sample.shape[0])
 
         #put everything into our dgl graph format and build the graph
         g_data = {('voxel', 'neighbor', 'sample'):
-                  (nearest_map_points_ind_normalized, unique_ind_sample),
+                  (nearest_map_points_ind_normalized, unique_ind_sample_to_map),
                   ('sample', 'ray', 'pixel'):
-                  (unique_ind_sample, ind_pixel_normalized),
+                  (unique_ind_sample_to_pixel, ind_pixel_normalized),
                   }
-
 
         g = dgl.heterograph(g_data)
 
         #store data on the graph nodes
         g.nodes['sample'].data['dist_to_cam'] = steps0.repeat(N0,1).flatten()[mask_all_samples]
         g.nodes['sample'].data['sample_xyz'] = torch.from_numpy(sample).float()
-        g.nodes['voxel'].data['ind_voxel'] = torch.from_numpy(unique_map_points_ind).float()
-        g.nodes['pixel'].data['ind_pixel'] = torch.from_numpy(unique_ind_pixels).float()
+        g.nodes['voxel'].data['ind_voxel'] = torch.from_numpy(unique_map_points_ind.astype(np.int32)).long()
+        g.nodes['pixel'].data['ind_pixel'] = torch.from_numpy(unique_ind_pixels).long()
         
+        import pyvista as pv
+        pl = pv.Plotter()
+        pl.set_background('white')
+        cloud = pv.PolyData(self.map[unique_map_points_ind])
+        pl.add_mesh(cloud, color='k', render_points_as_spheres=True, point_size=10,  opacity=0.5)
+
+        cloud = pv.PolyData(sample)
+        pl.add_mesh(cloud, color='g', render_points_as_spheres=True, point_size=10,  opacity=0.5)
+
+        pl.show()
+        #cloud = pv.PolyData(self.map)
+        #pl.add_mesh(cloud, color='b', render_points_as_spheres=True, point_size=1,  opacity=0.5)
+#
+        #cloud = pv.PolyData(sample0_xyz[((sample0_xyz > map_min) * (sample0_xyz < map_max)).all(axis=1)])
+        #pl.add_mesh(cloud, color='c', render_points_as_spheres=True, point_size=1,  opacity=0.5)
+
+        #perform tight sampling
+        self.perform_tight_sampling(g)
+
+        #render LiDAR depth
+        self.render_lidar_depth(g)
 
         return g
 
 
+    def perform_tight_sampling(self, g):
 
+        pass
+
+    def render_lidar_depth(self, g):
+        pass
 
 if __name__ == '__main__':
 
