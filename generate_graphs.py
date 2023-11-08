@@ -63,7 +63,7 @@ class GraphGenerator(LiDARDataset):
         if not os.path.exists(path_graph):
             print(f'Generate graph and save to {path_graph}')
             E = torch.from_numpy(self.data['E'][ind]).float()
-            #K = torch.from_numpy(self.data['K'][ind]).float()
+
             #adjust K according to image size
             img, img_raw_size = read_img(os.path.join(self.cfg['path_data_folder'], self.data_folder_name, self.data['path_img']
                                     [ind]), self.img_size, self.data['K'][ind], return_raw_size=True)
@@ -165,30 +165,33 @@ class GraphGenerator(LiDARDataset):
                   }
 
         g = dgl.heterograph(g_data)
+        print(g)
 
         #store data on the graph nodes
+        g.nodes['sample'].data['opacity_from_lidar'] = torch.from_numpy(dist_sample_to_map_points[:,0]) < 0.05
         g.nodes['sample'].data['dist_to_cam'] = steps0.repeat(N0,1).flatten()[mask_all_samples]
         g.nodes['sample'].data['sample_xyz'] = torch.from_numpy(sample).float()
         g.nodes['voxel'].data['ind_voxel'] = torch.from_numpy(unique_map_points_ind.astype(np.int32)).long()
         g.nodes['pixel'].data['ind_pixel'] = torch.from_numpy(unique_ind_pixels).long()
         
-        import pyvista as pv
-        pl = pv.Plotter()
-        pl.set_background('white')
-        cloud = pv.PolyData(self.map[unique_map_points_ind])
-        pl.add_mesh(cloud, color='k', render_points_as_spheres=True, point_size=10,  opacity=0.5)
 
-        cloud = pv.PolyData(sample)
-        pl.add_mesh(cloud, color='g', render_points_as_spheres=True, point_size=10,  opacity=0.5)
-
-        pl.show()
+        self.map = torch.from_numpy(self.map).float()
+        #import pyvista as pv
+        #pl = pv.Plotter()
+        #pl.set_background('white')
+        #cloud = pv.PolyData(self.map[unique_map_points_ind])
+        #pl.add_mesh(cloud, color='k', render_points_as_spheres=True, point_size=1,  opacity=0.5)
+        #cloud = pv.PolyData(sample)
+        #pl.add_mesh(cloud, color='g', render_points_as_spheres=True, point_size=1,  opacity=0.5)
+        #pl.show()
         #cloud = pv.PolyData(self.map)
         #pl.add_mesh(cloud, color='b', render_points_as_spheres=True, point_size=1,  opacity=0.5)
-#
+##
         #cloud = pv.PolyData(sample0_xyz[((sample0_xyz > map_min) * (sample0_xyz < map_max)).all(axis=1)])
         #pl.add_mesh(cloud, color='c', render_points_as_spheres=True, point_size=1,  opacity=0.5)
 
         #perform tight sampling
+
         self.perform_tight_sampling(g)
 
         #render LiDAR depth
@@ -198,11 +201,75 @@ class GraphGenerator(LiDARDataset):
 
 
     def perform_tight_sampling(self, g):
+        def func_msg(edges):
+            return {'ind_voxel': edges.src['ind_voxel'],
+                    'sample_xyz': edges.dst['sample_xyz'],
+                    'dist_to_cam': edges.dst['dist_to_cam']}
 
-        pass
+        def func_reduce(nodes):
+            sample_xyz = nodes.mailbox['sample_xyz']
+
+            if sample_xyz.shape[1] == 1:
+                return {'sample_select': torch.ones(sample_xyz.shape[0], dtype=torch.bool)}
+
+            map_xyz = self.map[nodes.mailbox['ind_voxel']]
+
+            diff = sample_xyz - map_xyz
+            dot_product = (diff[:,0].unsqueeze(1) * diff[:,1:]).sum(axis=-1)
+            mask_tight_sample = ~(dot_product>0).all(axis=1)
+
+
+            #don't do tight sampling to the samples on the ground
+            mask_sample_on_ground = self.map_ground_mask[nodes.mailbox['ind_voxel']].any(axis=1)
+            mask_tight_sample[mask_sample_on_ground] = True
+
+
+            return {'sample_select': mask_tight_sample}
+
+        block = dgl.to_block(g, dst_nodes={'sample': torch.arange(g.number_of_nodes('sample'))})
+        funcs = {}
+        funcs[('voxel', 'neighbor', 'sample')] = (func_msg, func_reduce)
+        block.multi_update_all(funcs, 'sum')
+
+        g.remove_nodes((~block.dstdata['sample_select']['sample']).nonzero()[:, 0], 'sample')
+        g.remove_nodes((g[('sample', 'ray', 'pixel')].in_degrees() == 0).nonzero()[:, 0], 'pixel')
+        g.remove_nodes((g[('voxel', 'neighbor', 'sample')].out_degrees() == 0).nonzero()[:, 0], 'voxel')
+
+        return g
+        
+
 
     def render_lidar_depth(self, g):
-        pass
+        def func_msg(edges):
+            return {'dist_to_cam': edges.src['dist_to_cam'], 'opacity_from_lidar':edges.src['opacity_from_lidar']}
+
+
+        def func_reduce(nodes):
+            
+            dist_to_cam = self.depth_min + self.depth_max * nodes.mailbox['dist_to_cam']/self.ray_sample_steps
+            opacity = nodes.mailbox['opacity_from_lidar'].float()
+
+            ray_step_length = (self.depth_max-self.depth_min)/(self.ray_sample_steps-1)
+#
+            # if close to a map point, density is 1 otherwise 0 1 - torch.exp(-density * ray_step_length)
+            
+            acc_transmission = torch.cumprod(torch.cat([torch.ones(opacity.shape[0], 1), 1. - opacity + 1e-10], dim=1), -1)[:, :-1]
+#
+            blend_weight = opacity * acc_transmission
+
+            acc = blend_weight.sum(axis=1)
+            depth = torch.sum(dist_to_cam * blend_weight, dim=1) / (acc+eps)
+            
+            return {'depth_lidar': depth}
+
+        funcs = {}
+        block = dgl.to_block(g, dst_nodes={'pixel': torch.arange(g.number_of_nodes('pixel'))})
+        funcs['sample', 'ray', 'pixel'] = (func_msg, func_reduce)
+        block.multi_update_all(funcs, 'sum')
+        g.nodes['pixel'].data['depth_lidar'] = block.dstdata['depth_lidar']['pixel'][:, None]
+
+
+        return g
 
 if __name__ == '__main__':
 
