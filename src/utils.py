@@ -89,7 +89,7 @@ def get_ray_dir(uv, K, E):
     z = torch.ones_like(x)
     dirs = torch.stack([x, y, z], axis=-1)
 
-    dirs = dirs @ E[0:3, 0:3]  # .T
+    dirs = dirs @ E[0:3, 0:3]  
 
     dirs = dirs / (torch.norm(dirs, dim=1)[:, None] + 1e-5)
 

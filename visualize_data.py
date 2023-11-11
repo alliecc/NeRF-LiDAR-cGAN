@@ -114,8 +114,8 @@ if __name__ == '__main__':
     map_lidar = np.asarray(o3d.io.read_point_cloud(path_lidar_map).points)
 
     # to visualize the graph, LiDAR depth, ground truth image for one single sample
-    sample_ind_to_visualize = 0
-    visualize_a_sample(dataloader_train.dataset[sample_ind_to_visualize], map_lidar)
+    sample_ind_to_visualize = 7
+    visualize_a_sample(dataloader_val.dataset[sample_ind_to_visualize], map_lidar)
 
     # to visualize the camera poses on the map of the whole dataset
-    visualize_cam_pose_on_map(dataloader_train, dataloader_train, map_lidar)
+    visualize_cam_pose_on_map(dataloader_val, dataloader_train, map_lidar)

@@ -33,7 +33,7 @@ class GraphGenerator(LiDARDataset):
         self.depth_min = 1
         self.depth_max = 70
         self.map_kd_tree = KDTree(self.map)
-        self.map = torch.from_numpy(self.map).float()
+        
 
 
         #for argoverse datasets, we can use the ground labels from the map for better ground sampling
@@ -57,10 +57,11 @@ class GraphGenerator(LiDARDataset):
             with open(path_ground_mask, 'rb') as f:
                 self.map_ground_mask = pickle.load(f)
 
+        self.map = torch.from_numpy(self.map).float() 
 
-    def __getitem__(self, ind):
 
-        path_graph = os.path.join(self.cfg['path_preprocessed_graph'], self.name_data, self.cfg['log_id'], f'{self.split}_{ind:04d}_v2.bin')
+    def __getitem__(self, ind): 
+        path_graph = os.path.join(self.cfg['path_preprocessed_graph'], self.name_data, self.cfg['log_id'], f'{self.split}_{ind:04d}.bin')
 
         if not os.path.exists(path_graph):
             print(f'Generate graph and save to {path_graph}')
@@ -115,10 +116,9 @@ class GraphGenerator(LiDARDataset):
     def generate_initial_ray_sample(self, cam_center, ray_dirs):
 
         #the integer steps need to be converted to actual depth values when computing depth
-        steps = torch.arange(self.ray_sample_steps, dtype=torch.short)[None, :]
+        steps = torch.arange(self.ray_sample_steps)[None, :]
 
         steps_dist_to_cam = self.depth_min + self.depth_max * steps/self.ray_sample_steps
-
 
         sample_pts = cam_center[None, None, :] + steps_dist_to_cam[:, :, None]*ray_dirs[:, None, :]
 
@@ -151,9 +151,9 @@ class GraphGenerator(LiDARDataset):
         mask_all_samples[cum_sum_num_samples_per_pixel > self.num_sample_per_ray] = 0
         mask_all_samples = (mask_all_samples==1).flatten()
 
+
         #query knn neighbors for the valid samples
         sample = sample0_xyz[mask_all_samples]
-
         dist_sample_to_map_points, nearest_map_points_ind = self.map_kd_tree.query(sample, k = self.max_num_map_points, distance_upper_bound=self.knn_radius)
         
         #some samples have less than max_num_map_points nearby map points
@@ -201,38 +201,41 @@ class GraphGenerator(LiDARDataset):
         #pl.set_background('white')
         #cloud = pv.PolyData(self.map[g.nodes['voxel'].data['ind_voxel']].numpy())
         #pl.add_mesh(cloud, color='k', render_points_as_spheres=True, point_size=1,  opacity=0.5)
-##
+###
         #cloud = pv.PolyData(g.nodes['sample'].data['sample_xyz'].numpy())
         #pl.add_mesh(cloud, color='g', render_points_as_spheres=True, point_size=1,  opacity=0.5)
         #pl.show()
         #cloud = pv.PolyData(self.map)
         #pl.add_mesh(cloud, color='b', render_points_as_spheres=True, point_size=1,  opacity=0.5)
-####
+#####
         #cloud = pv.PolyData(sample0_xyz[((sample0_xyz > map_min) * (sample0_xyz < map_max)).all(axis=1)])
         #pl.add_mesh(cloud, color='c', render_points_as_spheres=True, point_size=1,  opacity=0.5)
-
-        perform tight sampling
-        
+#
+        # 
+        #
         #pcd = o3d.geometry.PointCloud()
         #pcd.points =  o3d.utility.Vector3dVector(g.nodes['sample'].data['sample_xyz'].numpy())
         #o3d.io.write_point_cloud('before.ply',pcd)
-##
+###
         #pcd = o3d.geometry.PointCloud() 
         #pcd.points = o3d.utility.Vector3dVector(self.map[g.nodes['voxel'].data['ind_voxel']].numpy())
         #o3d.io.write_point_cloud('map.ply',pcd )
 ##
+
+        #perform tight sampling
         self.perform_tight_sampling(g)
         #cloud = pv.PolyData(g.nodes['sample'].data['sample_xyz'].numpy())
         #pl.add_mesh(cloud, color='b', render_points_as_spheres=True, point_size=1,  opacity=0.5)
 ##
-##
+## 
         #pcd = o3d.geometry.PointCloud() 
         #pcd.points = o3d.utility.Vector3dVector(g.nodes['sample'].data['sample_xyz'].numpy())
         #o3d.io.write_point_cloud('after.ply',pcd )
-        
-        #render LiDAR depth
+        #
+        #
         #pl.show()
 
+        #render LiDAR depth
         self.render_lidar_depth(g)
         print(g)
         return g
@@ -329,7 +332,7 @@ if __name__ == '__main__':
 
 
 
-    list_splits = ['train', 'val']
+    list_splits = [ 'val','train',]
     for split in list_splits:
         dataset = GraphGenerator(cfg, split, cfg['name_data'])
         dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=False, collate_fn=collate_fn)
