@@ -12,6 +12,7 @@ from src.trainer import Trainer
 from src.dataloader import LiDARDataset, collate_fn
 from src.utils import get_ray_dir, modify_K_resize, read_img
 from pykdtree.kdtree import KDTree
+eps = 1e-10
 
 class GraphGenerator(LiDARDataset):
     def __init__(self, cfg, split, name_data):
@@ -32,6 +33,7 @@ class GraphGenerator(LiDARDataset):
         self.depth_min = 1
         self.depth_max = 70
         self.map_kd_tree = KDTree(self.map)
+        self.map = torch.from_numpy(self.map).float()
 
 
         #for argoverse datasets, we can use the ground labels from the map for better ground sampling
@@ -74,20 +76,39 @@ class GraphGenerator(LiDARDataset):
 
 
             graph = self.generate_dgl_graph_from_E(E, K)
+            
+            #from src.utils import depth_inv_to_color
+            #I = np.zeros((256* 256,3))
+            #ind_pixel = graph.nodes['pixel'].data['ind_pixel'].numpy()
+            #depth = graph.nodes['pixel'].data['depth_lidar'].numpy()
+            #depth[depth != 0] = 1/depth[depth != 0]
+            #depth_color = depth_inv_to_color(depth[np.newaxis, :,0])[0]
+            #I[ind_pixel,:] = depth_color
+            #import cv2
+            #cv2.imwrite('d.png',I.reshape(256, 256, 3)[:,:,[2,1,0]]*255)
+#
+            #I = np.zeros((256* 256,3))
+            #img = img.reshape(256*256,3)
+            #I[ind_pixel] = img[ind_pixel]
+            #from src.utils import denormalize_img
+            #cv2.imwrite('gt.png',denormalize_img(torch.from_numpy(img.reshape(256, 256, 3))).numpy()[:,:,[2,1,0]])
+            #import pdb; pdb.set_trace()
+
             dgl.data.utils.save_graphs(path_graph, graph)
+
 
         else:
             graph = dgl.load_graphs(path_graph)[0][0]
 
 
     def generate_dgl_graph_from_E(self, E, K):
-        u, v = torch.meshgrid(torch.arange(self.img_size), torch.arange(self.img_size))
+        v, u = torch.meshgrid(torch.arange(self.img_size), torch.arange(self.img_size))
         uv = torch.stack((u, v)).reshape(2, -1).transpose(0, 1)
         ray_dirs = get_ray_dir(uv, K, E)
 
         cam_center = torch.inverse(E)[0:3, 3]
 
-        g = self.point_sampler_build_dgl_graph(cam_center, ray_dirs, E, K)
+        return self.point_sampler_build_dgl_graph(cam_center, ray_dirs, E, K)
 
 
 
@@ -111,10 +132,9 @@ class GraphGenerator(LiDARDataset):
         N0, M0, _ = sample0_xyz.shape
         sample0_xyz = sample0_xyz.reshape(-1, 3).numpy() # (N0*M0) x3 in world coorinate frame
 
-
         #remove the samples outside the map range
-        map_min = self.map.min(axis=0)
-        map_max = self.map.max(axis=0)
+        map_min = self.map.min(axis=0)[0].numpy()
+        map_max = self.map.max(axis=0)[0].numpy()
         ind_sel_samples = np.arange(N0*M0)
         ind_sel_samples = ind_sel_samples[((sample0_xyz > map_min) * (sample0_xyz < map_max)).all(axis=1)]
 
@@ -165,7 +185,7 @@ class GraphGenerator(LiDARDataset):
                   }
 
         g = dgl.heterograph(g_data)
-        print(g)
+        
 
         #store data on the graph nodes
         g.nodes['sample'].data['opacity_from_lidar'] = torch.from_numpy(dist_sample_to_map_points[:,0]) < 0.05
@@ -175,28 +195,46 @@ class GraphGenerator(LiDARDataset):
         g.nodes['pixel'].data['ind_pixel'] = torch.from_numpy(unique_ind_pixels).long()
         
 
-        self.map = torch.from_numpy(self.map).float()
+        
         #import pyvista as pv
         #pl = pv.Plotter()
         #pl.set_background('white')
-        #cloud = pv.PolyData(self.map[unique_map_points_ind])
+        #cloud = pv.PolyData(self.map[g.nodes['voxel'].data['ind_voxel']].numpy())
         #pl.add_mesh(cloud, color='k', render_points_as_spheres=True, point_size=1,  opacity=0.5)
-        #cloud = pv.PolyData(sample)
+##
+        #cloud = pv.PolyData(g.nodes['sample'].data['sample_xyz'].numpy())
         #pl.add_mesh(cloud, color='g', render_points_as_spheres=True, point_size=1,  opacity=0.5)
         #pl.show()
         #cloud = pv.PolyData(self.map)
         #pl.add_mesh(cloud, color='b', render_points_as_spheres=True, point_size=1,  opacity=0.5)
-##
+####
         #cloud = pv.PolyData(sample0_xyz[((sample0_xyz > map_min) * (sample0_xyz < map_max)).all(axis=1)])
         #pl.add_mesh(cloud, color='c', render_points_as_spheres=True, point_size=1,  opacity=0.5)
 
-        #perform tight sampling
-
+        perform tight sampling
+        
+        #pcd = o3d.geometry.PointCloud()
+        #pcd.points =  o3d.utility.Vector3dVector(g.nodes['sample'].data['sample_xyz'].numpy())
+        #o3d.io.write_point_cloud('before.ply',pcd)
+##
+        #pcd = o3d.geometry.PointCloud() 
+        #pcd.points = o3d.utility.Vector3dVector(self.map[g.nodes['voxel'].data['ind_voxel']].numpy())
+        #o3d.io.write_point_cloud('map.ply',pcd )
+##
         self.perform_tight_sampling(g)
-
+        #cloud = pv.PolyData(g.nodes['sample'].data['sample_xyz'].numpy())
+        #pl.add_mesh(cloud, color='b', render_points_as_spheres=True, point_size=1,  opacity=0.5)
+##
+##
+        #pcd = o3d.geometry.PointCloud() 
+        #pcd.points = o3d.utility.Vector3dVector(g.nodes['sample'].data['sample_xyz'].numpy())
+        #o3d.io.write_point_cloud('after.ply',pcd )
+        
         #render LiDAR depth
-        self.render_lidar_depth(g)
+        #pl.show()
 
+        self.render_lidar_depth(g)
+        print(g)
         return g
 
 
@@ -206,11 +244,11 @@ class GraphGenerator(LiDARDataset):
                     'sample_xyz': edges.dst['sample_xyz'],
                     'dist_to_cam': edges.dst['dist_to_cam']}
 
-        def func_reduce(nodes):
+        def func_reduce(nodes): 
             sample_xyz = nodes.mailbox['sample_xyz']
 
             if sample_xyz.shape[1] == 1:
-                return {'sample_select': torch.ones(sample_xyz.shape[0], dtype=torch.bool)}
+                return {'sample_select': torch.zeros(sample_xyz.shape[0], dtype=torch.bool)}
 
             map_xyz = self.map[nodes.mailbox['ind_voxel']]
 
@@ -218,12 +256,10 @@ class GraphGenerator(LiDARDataset):
             dot_product = (diff[:,0].unsqueeze(1) * diff[:,1:]).sum(axis=-1)
             mask_tight_sample = ~(dot_product>0).all(axis=1)
 
-
-            #don't do tight sampling to the samples on the ground
+            #don't do tight sampling to the samples on the ground, the line pattern is too sparse
             mask_sample_on_ground = self.map_ground_mask[nodes.mailbox['ind_voxel']].any(axis=1)
             mask_tight_sample[mask_sample_on_ground] = True
-
-
+ 
             return {'sample_select': mask_tight_sample}
 
         block = dgl.to_block(g, dst_nodes={'sample': torch.arange(g.number_of_nodes('sample'))})
@@ -234,6 +270,7 @@ class GraphGenerator(LiDARDataset):
         g.remove_nodes((~block.dstdata['sample_select']['sample']).nonzero()[:, 0], 'sample')
         g.remove_nodes((g[('sample', 'ray', 'pixel')].in_degrees() == 0).nonzero()[:, 0], 'pixel')
         g.remove_nodes((g[('voxel', 'neighbor', 'sample')].out_degrees() == 0).nonzero()[:, 0], 'voxel')
+
 
         return g
         
@@ -259,7 +296,7 @@ class GraphGenerator(LiDARDataset):
 
             acc = blend_weight.sum(axis=1)
             depth = torch.sum(dist_to_cam * blend_weight, dim=1) / (acc+eps)
-            
+
             return {'depth_lidar': depth}
 
         funcs = {}
@@ -271,7 +308,7 @@ class GraphGenerator(LiDARDataset):
 
         return g
 
-if __name__ == '__main__':
+if __name__ == '__main__': 
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--log_id',  type=str, required=True)
