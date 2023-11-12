@@ -75,26 +75,7 @@ class GraphGenerator(LiDARDataset):
 
             K = modify_K_resize(self.data['K'][ind], resize_ratio, img_raw_size)
 
-
             graph = self.generate_dgl_graph_from_E(E, K)
-            
-            #from src.utils import depth_inv_to_color
-            #I = np.zeros((256* 256,3))
-            #ind_pixel = graph.nodes['pixel'].data['ind_pixel'].numpy()
-            #depth = graph.nodes['pixel'].data['depth_lidar'].numpy()
-            #depth[depth != 0] = 1/depth[depth != 0]
-            #depth_color = depth_inv_to_color(depth[np.newaxis, :,0])[0]
-            #I[ind_pixel,:] = depth_color
-            #import cv2
-            #cv2.imwrite('d.png',I.reshape(256, 256, 3)[:,:,[2,1,0]]*255)
-#
-            #I = np.zeros((256* 256,3))
-            #img = img.reshape(256*256,3)
-            #I[ind_pixel] = img[ind_pixel]
-            #from src.utils import denormalize_img
-            #cv2.imwrite('gt.png',denormalize_img(torch.from_numpy(img.reshape(256, 256, 3))).numpy()[:,:,[2,1,0]])
-            #import pdb; pdb.set_trace()
-
             dgl.data.utils.save_graphs(path_graph, graph)
 
 
@@ -195,45 +176,8 @@ class GraphGenerator(LiDARDataset):
         g.nodes['pixel'].data['ind_pixel'] = torch.from_numpy(unique_ind_pixels).long()
         
 
-        
-        #import pyvista as pv
-        #pl = pv.Plotter()
-        #pl.set_background('white')
-        #cloud = pv.PolyData(self.map[g.nodes['voxel'].data['ind_voxel']].numpy())
-        #pl.add_mesh(cloud, color='k', render_points_as_spheres=True, point_size=1,  opacity=0.5)
-###
-        #cloud = pv.PolyData(g.nodes['sample'].data['sample_xyz'].numpy())
-        #pl.add_mesh(cloud, color='g', render_points_as_spheres=True, point_size=1,  opacity=0.5)
-        #pl.show()
-        #cloud = pv.PolyData(self.map)
-        #pl.add_mesh(cloud, color='b', render_points_as_spheres=True, point_size=1,  opacity=0.5)
-#####
-        #cloud = pv.PolyData(sample0_xyz[((sample0_xyz > map_min) * (sample0_xyz < map_max)).all(axis=1)])
-        #pl.add_mesh(cloud, color='c', render_points_as_spheres=True, point_size=1,  opacity=0.5)
-#
-        # 
-        #
-        #pcd = o3d.geometry.PointCloud()
-        #pcd.points =  o3d.utility.Vector3dVector(g.nodes['sample'].data['sample_xyz'].numpy())
-        #o3d.io.write_point_cloud('before.ply',pcd)
-###
-        #pcd = o3d.geometry.PointCloud() 
-        #pcd.points = o3d.utility.Vector3dVector(self.map[g.nodes['voxel'].data['ind_voxel']].numpy())
-        #o3d.io.write_point_cloud('map.ply',pcd )
-##
-
         #perform tight sampling
         self.perform_tight_sampling(g)
-        #cloud = pv.PolyData(g.nodes['sample'].data['sample_xyz'].numpy())
-        #pl.add_mesh(cloud, color='b', render_points_as_spheres=True, point_size=1,  opacity=0.5)
-##
-## 
-        #pcd = o3d.geometry.PointCloud() 
-        #pcd.points = o3d.utility.Vector3dVector(g.nodes['sample'].data['sample_xyz'].numpy())
-        #o3d.io.write_point_cloud('after.ply',pcd )
-        #
-        #
-        #pl.show()
 
         #render LiDAR depth
         self.render_lidar_depth(g)
