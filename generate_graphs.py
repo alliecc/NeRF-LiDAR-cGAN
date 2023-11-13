@@ -214,7 +214,8 @@ class GraphGenerator(LiDARDataset):
 
     def render_lidar_depth(self, g):
         def func_msg(edges):
-            return {'dist_to_cam': edges.src['dist_to_cam'], 'opacity_from_lidar': edges.src['opacity_from_lidar']}
+            return {'dist_to_cam': edges.src['dist_to_cam'],
+                    'opacity_from_lidar': edges.src['opacity_from_lidar']}
 
         def func_reduce(nodes):
 
