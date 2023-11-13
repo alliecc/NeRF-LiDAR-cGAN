@@ -61,6 +61,10 @@ If you find our work useful, please consider to cite:
 
    5. For netowrk training, remove the `--eval_only` argument. 
    
+### 5. Graph generation code sample:
+Besides the preprocessed graphs, We also provide a sample code `generate_graphs.py` for generating new graphs. This version generates slighter high-quality graphs but runs a bit slower than the original version we used in the paper. To use it:
+1. Modify `path_preprocessed_graph` in `configs/config.ini` to your goal folder.
+2. Run: `python3 generate_graphs.py --log_id=<log_id> --name_config=config.ini --name_data=clean`.
 
-### 
+
 
